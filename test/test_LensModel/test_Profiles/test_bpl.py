@@ -50,9 +50,10 @@ class TestBPLInternals(object):
 
         # Return an intentionally non-zero shear in major-axis frame,
         # so the wrapper must zero it out at exact center.
-        def _fake_major_hessian(x, y, b, a, a_c, r_c, q):
+        def _fake_major_hessian(x, y, b, a, a_c, r_c, q, **kwargs):
             # f__xx, f__xy, f__yx, f__yy
             return 2.0, 0.3, 0.3, 1.0
+
 
         monkeypatch.setattr(self.major, "hessian", _fake_major_hessian)
 
@@ -178,7 +179,12 @@ class TestBPLInternals(object):
         """Cover s0arr scalar-input resize (nzc==1), convergence break, and scalar
         unwrap."""
         out = self.major.s0arr(
-            alpha=2.2, alphac=1.7, zel2=0.5, c=0.8, target_precision=1e-4
+            alpha=2.2,
+            alphac=1.7,
+            zel2=0.5,
+            c=0.8,
+            target_precision=1e-4,
+            maxiter=100,
         )
         _assert_finite_complex(out)
 
@@ -186,9 +192,82 @@ class TestBPLInternals(object):
         """Cover s2arr scalar-input resize (nzc==1), convergence break, and scalar
         unwrap."""
         out = self.major.s2arr(
-            alpha=2.2, alphac=1.7, zel2=0.5, c=0.8, target_precision=1e-4
+            alpha=2.2,
+            alphac=1.7,
+            zel2=0.5,
+            c=0.8,
+            target_precision=1e-4,
+            maxiter=100,
         )
         _assert_finite_complex(out)
+
+    
+    def test_resolve_settings_defaults_and_overrides(self):
+        """Cover BPLMajorAxis._resolve_settings, which controls target_precision and maxiter."""
+        tp, mi = self.major._resolve_settings(target_precision=None, maxiter=None)
+        assert tp == self.major._target_precision
+        assert mi == self.major._maxiter
+
+        tp2, mi2 = self.major._resolve_settings(target_precision=1e-3, maxiter=25)
+        assert tp2 == 1e-3
+        assert mi2 == 25
+
+    def test_S0_S2_accept_numpy_scalar_0d_inputs(self):
+        """Regression test: S0/S2 must handle numpy 0d arrays (np.array(0.3)).
+
+        This is the exact shape that triggers ValueError in `np.where(mask)` if `mask` is 0d.
+        """
+        a, a_c = 2.2, 1.7
+        r_c = 0.6
+
+        # 0d numpy arrays
+        R_el = np.array(0.3 * r_c)
+        C = np.array(0.8)
+
+        out0 = self.major.S0(a=a, a_c=a_c, C=C, R_el=R_el, r_c=r_c, target_precision=1e-3, maxiter=50)
+        out2 = self.major.S2(a=a, a_c=a_c, C=C, R_el=R_el, r_c=r_c, target_precision=1e-3, maxiter=50)
+
+        _assert_finite_complex(out0)
+        _assert_finite_complex(out2)
+
+    def test_S0_S2_masked_behavior_inside_outside_rc(self):
+        """S0/S2 should return non-zero only for R_el < r_c, and zero otherwise."""
+        a, a_c = 2.2, 1.7
+        r_c = 0.6
+
+        R_el = np.array([0.3 * r_c, 1.2 * r_c])
+        C = np.array([0.8, 0.8])
+
+        out0 = self.major.S0(a=a, a_c=a_c, C=C, R_el=R_el, r_c=r_c, target_precision=1e-3, maxiter=60)
+        out2 = self.major.S2(a=a, a_c=a_c, C=C, R_el=R_el, r_c=r_c, target_precision=1e-3, maxiter=60)
+
+        out0 = np.asarray(out0)
+        out2 = np.asarray(out2)
+
+        assert out0.shape == R_el.shape
+        assert out2.shape == R_el.shape
+
+        # second entry is outside r_c -> should be exactly zero as coded
+        npt.assert_allclose(out0[1], 0.0, atol=0.0)
+        npt.assert_allclose(out2[1], 0.0, atol=0.0)
+
+        _assert_finite_complex(out0)
+        _assert_finite_complex(out2)
+
+    @pytest.mark.parametrize(
+        "target_precision,maxiter",
+        [(None, None), (1e-3, 30), (1e-5, 80)],
+    )
+    def test_user_overrides_precision_and_maxiter_do_not_crash(self, target_precision, maxiter):
+        """Ensure new knobs (target_precision/maxiter) are threaded through derivatives/hessian."""
+        kwargs = self._kwargs_bpl(b=1.1, a=2.2, a_c=1.7, r_c=0.6, q=0.75, phi_G=0.5)
+        x = np.array([0.2, 0.9, 1.4])
+        y = np.array([0.1, 0.3, -0.2])
+
+        fx, fy = self.bpl.derivatives(x, y, target_precision=target_precision, maxiter=maxiter, **kwargs)
+        f_xx, f_xy, f_yx, f_yy = self.bpl.hessian(x, y, target_precision=target_precision, maxiter=maxiter, **kwargs)
+
+        _finite([fx, fy, f_xx, f_xy, f_yx, f_yy])
 
     def test_major_axis_derivatives_scalar_origin_hits_Z_safe_scalar(self):
         fx, fy = self.major.derivatives(0.0, 0.0, b=1.0, a=2.2, a_c=1.7, r_c=0.6, q=0.8)
@@ -200,6 +279,20 @@ class TestBPLInternals(object):
         )
         _finite([f_xx, f_xy, f_yx, f_yy])
         npt.assert_allclose(f_xy, f_yx, atol=1e-12, rtol=0.0)
+        
+    def test_F_hits_a_half_branch(self):
+        # Cover F(a,z) special branch a==0.5 (spence-based)
+        z = 0.3  # keep within (0,1) to avoid branch cut issues
+        val = self.major.F(0.5, z)
+        assert np.isfinite(val)
+
+    def test_kappa2func_scalar_returns_float_zero(self):
+        # Cover scalar branch: returns python float 0.0 when a==a_c (or r_c<=0)
+        out = self.major.kappa2func(b=1.0, a=2.0, a_c=2.0, r_c=1.0, R_el=0.5)
+        assert out == 0.0
+        assert isinstance(out, float)
+
+
 
 
 class TestBPLvsEPL(object):
@@ -379,3 +472,4 @@ class TestBPLvsEPL(object):
 
 if __name__ == "__main__":
     pytest.main()
+
