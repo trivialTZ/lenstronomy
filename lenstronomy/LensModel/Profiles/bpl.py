@@ -761,7 +761,7 @@ class BPLMajorAxis(LensProfileBase):
         :param a_c: inner slope \\(\\alpha_c\\)
         :return: True if r_c>0 and a != a_c
         """
-        Return(r_c > 0.0) and (a != a_c)
+        return (r_c > 0.0) and (a != a_c)
 
     @staticmethod
     def _kappa1_epl_like(pow_a, a):
