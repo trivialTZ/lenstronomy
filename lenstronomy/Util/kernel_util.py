@@ -107,14 +107,14 @@ def kernel_make_odd(kernel_even):
     assert n_row == n_col
     if n_row % 2 == 1:
         return kernel_even
-    
+
     # extend kernel by one on each side; fill edges with zero
     _kernel = np.zeros((n_row + 2, n_col + 2))
     _kernel[1:-1, 1:-1] = kernel_even
 
     # creates new odd sized kernel by linear interpolation
-    xrange = np.arange(n_col+1)
-    yrange = np.arange(n_row+1)
+    xrange = np.arange(n_col + 1)
+    yrange = np.arange(n_row + 1)
     x_grid, y_grid = np.meshgrid(xrange, yrange)
 
     return ndimage.map_coordinates(_kernel, coordinates=[y_grid, x_grid], order=1)
