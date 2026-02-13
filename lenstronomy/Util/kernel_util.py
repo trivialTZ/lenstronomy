@@ -113,8 +113,8 @@ def kernel_make_odd(kernel_even):
     _kernel[1:-1, 1:-1] = kernel_even
 
     # creates new odd sized kernel by linear interpolation
-    xrange = np.arange(n_col + 1)
-    yrange = np.arange(n_row + 1)
+    xrange = np.arange(n_col + 1) + 0.5
+    yrange = np.arange(n_row + 1) + 0.5
     x_grid, y_grid = np.meshgrid(xrange, yrange)
 
     return ndimage.map_coordinates(_kernel, coordinates=[y_grid, x_grid], order=1)
